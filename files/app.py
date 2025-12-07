@@ -1,0 +1,163 @@
+import streamlit as st
+import tensorflow as tf
+from tensorflow import keras
+import numpy as np
+from PIL import Image
+import io
+
+# Configure the page
+st.set_page_config(
+    page_title="TensorFlow Image Classifier",
+    page_icon="🖼️",
+    layout="centered"
+)
+
+@st.cache_resource
+def load_model(model_path):
+    """
+    Load TensorFlow model from h5 file
+    Uses Streamlit's cache to avoid reloading on every interaction
+    """
+    try:
+        model = keras.models.load_model(model_path)
+        return model
+    except Exception as e:
+        st.error(f"Error loading model: {str(e)}")
+        return None
+
+def preprocess_image(image, target_size=(224, 224)):
+    """
+    Preprocess the uploaded image for model prediction
+    
+    Args:
+        image: PIL Image object
+        target_size: Target size for the image (width, height)
+    
+    Returns:
+        Preprocessed image array ready for prediction
+    """
+    # Resize image
+    image = image.resize(target_size)
+    
+    # Convert to array
+    img_array = np.array(image)
+    
+    # If image is grayscale, convert to RGB
+    if len(img_array.shape) == 2:
+        img_array = np.stack([img_array] * 3, axis=-1)
+    
+    # If image has alpha channel, remove it
+    if img_array.shape[-1] == 4:
+        img_array = img_array[:, :, :3]
+    
+    # Add batch dimension
+    img_array = np.expand_dims(img_array, axis=0)
+    
+    # Normalize pixel values (adjust based on your model's training)
+    img_array = img_array.astype('float32') / 255.0
+    
+    return img_array
+
+def main():
+    st.title("🖼️ TensorFlow Image Classifier")
+    st.write("Upload an image to get predictions from your TensorFlow model")
+    
+    # Sidebar for model configuration
+    st.sidebar.header("Model Configuration")
+    
+    # Model path input
+    model_path = st.sidebar.text_input(
+        "Path to TensorFlow Model (.h5)",
+        value="model.h5",
+        help="Enter the path to your TensorFlow model file"
+    )
+    
+    # Image size configuration
+    st.sidebar.subheader("Image Preprocessing")
+    img_width = st.sidebar.number_input("Image Width", value=224, min_value=32, max_value=1024)
+    img_height = st.sidebar.number_input("Image Height", value=224, min_value=32, max_value=1024)
+    
+    # Load model
+    model = None
+    if model_path:
+        with st.spinner("Loading model..."):
+            model = load_model(model_path)
+        
+        if model:
+            st.sidebar.success("✅ Model loaded successfully!")
+            
+            # Display model summary
+            with st.sidebar.expander("Model Architecture"):
+                model_summary = []
+                model.summary(print_fn=lambda x: model_summary.append(x))
+                st.text('\n'.join(model_summary))
+    
+    # Main content area
+    if model is None:
+        st.warning("⚠️ Please provide a valid model path in the sidebar")
+        st.info("Make sure your .h5 model file is accessible at the specified path")
+        return
+    
+    # File uploader
+    uploaded_file = st.file_uploader(
+        "Choose an image...",
+        type=["jpg", "jpeg", "png", "bmp"],
+        help="Upload an image file to classify"
+    )
+    
+    if uploaded_file is not None:
+        # Display the uploaded image
+        image = Image.open(uploaded_file)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("Uploaded Image")
+            st.image(image, use_container_width=True)
+        
+        # Make prediction
+        with st.spinner("Making prediction..."):
+            try:
+                # Preprocess image
+                processed_image = preprocess_image(image, target_size=(img_width, img_height))
+                
+                # Get prediction
+                prediction = model.predict(processed_image, verbose=0)
+                
+                with col2:
+                    st.subheader("Prediction Results")
+                    
+                    # Handle different output types
+                    if prediction.shape[-1] == 1:
+                        # Binary classification
+                        confidence = float(prediction[0][0])
+                        st.metric("Confidence Score", f"{confidence:.4f}")
+                        
+                        if confidence > 0.5:
+                            st.success(f"Predicted Class: Positive (Confidence: {confidence:.2%})")
+                        else:
+                            st.info(f"Predicted Class: Negative (Confidence: {(1-confidence):.2%})")
+                    
+                    else:
+                        # Multi-class classification
+                        predicted_class = np.argmax(prediction[0])
+                        confidence = float(prediction[0][predicted_class])
+                        
+                        st.metric("Predicted Class", predicted_class)
+                        st.metric("Confidence", f"{confidence:.2%}")
+                        
+                        # Show all class probabilities
+                        st.write("**All Class Probabilities:**")
+                        for i, prob in enumerate(prediction[0]):
+                            st.progress(float(prob), text=f"Class {i}: {prob:.4f}")
+                
+                # Show raw prediction array
+                with st.expander("Raw Prediction Output"):
+                    st.write(prediction)
+                
+            except Exception as e:
+                st.error(f"Error during prediction: {str(e)}")
+                st.write("Please ensure the image format matches your model's expected input")
+
+if __name__ == "__main__":
+    main()
