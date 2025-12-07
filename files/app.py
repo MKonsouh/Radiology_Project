@@ -3,11 +3,12 @@ import tensorflow as tf
 from tensorflow import keras
 import numpy as np
 from PIL import Image
-import plotly.graph_objects as go
-import plotly.express as px
 import time
 import os
 import glob
+import matplotlib.pyplot as plt
+from matplotlib.patches import Wedge
+import matplotlib.patches as mpatches
 
 # Configure the page with radiology theme
 st.set_page_config(
@@ -91,6 +92,24 @@ st.markdown("""
         background-color: rgba(0, 212, 255, 0.1);
         border-radius: 5px;
     }
+    
+    /* Result box styling */
+    .result-box {
+        padding: 20px;
+        border-radius: 10px;
+        margin: 10px 0;
+        border: 2px solid;
+    }
+    
+    .healthy-box {
+        background-color: rgba(0, 255, 136, 0.1);
+        border-color: #00ff88;
+    }
+    
+    .disease-box {
+        background-color: rgba(255, 68, 68, 0.1);
+        border-color: #ff4444;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -118,105 +137,93 @@ def get_model_input_shape(model):
 
 def preprocess_image(image, target_size=(128, 128)):
     """Preprocess the uploaded image for model prediction"""
-    # Resize image
     image = image.resize(target_size)
-    
-    # Convert to array
     img_array = np.array(image)
     
-    # If image is grayscale, convert to RGB
     if len(img_array.shape) == 2:
         img_array = np.stack([img_array] * 3, axis=-1)
     
-    # If image has alpha channel, remove it
     if img_array.shape[-1] == 4:
         img_array = img_array[:, :, :3]
     
-    # Add batch dimension
     img_array = np.expand_dims(img_array, axis=0)
-    
-    # Normalize pixel values
     img_array = img_array.astype('float32') / 255.0
     
     return img_array
 
 def create_gauge_chart(confidence, prediction):
-    """Create an interactive gauge chart for confidence score"""
-    color = "#00ff88" if prediction == "Healthy" else "#ff4444"
+    """Create a gauge chart using matplotlib"""
+    fig, ax = plt.subplots(figsize=(8, 4), facecolor='#0a1929')
+    ax.set_facecolor('#0a1929')
     
-    fig = go.Figure(go.Indicator(
-        mode = "gauge+number+delta",
-        value = confidence * 100,
-        domain = {'x': [0, 1], 'y': [0, 1]},
-        title = {'text': f"<b>{prediction}</b>", 'font': {'size': 24, 'color': color}},
-        delta = {'reference': 50, 'increasing': {'color': color}},
-        gauge = {
-            'axis': {'range': [None, 100], 'tickwidth': 1, 'tickcolor': "white"},
-            'bar': {'color': color},
-            'bgcolor': "rgba(0,0,0,0)",
-            'borderwidth': 2,
-            'bordercolor': "white",
-            'steps': [
-                {'range': [0, 50], 'color': 'rgba(255, 68, 68, 0.3)'},
-                {'range': [50, 75], 'color': 'rgba(255, 200, 68, 0.3)'},
-                {'range': [75, 100], 'color': 'rgba(0, 255, 136, 0.3)'}
-            ],
-            'threshold': {
-                'line': {'color': "white", 'width': 4},
-                'thickness': 0.75,
-                'value': 50
-            }
-        }
-    ))
+    # Determine color based on prediction
+    if prediction == "Healthy":
+        color = '#00ff88'
+    else:
+        color = '#ff4444'
     
-    fig.update_layout(
-        paper_bgcolor = "rgba(0,0,0,0)",
-        plot_bgcolor = "rgba(0,0,0,0)",
-        font = {'color': "white", 'family': "Arial"},
-        height=300
-    )
+    # Create gauge
+    theta = confidence * 180
     
+    # Background arc
+    arc1 = Wedge((0.5, 0), 0.4, 0, 180, width=0.1, facecolor='#2a3f5f', edgecolor='white', linewidth=2)
+    ax.add_patch(arc1)
+    
+    # Confidence arc
+    arc2 = Wedge((0.5, 0), 0.4, 0, theta, width=0.1, facecolor=color, edgecolor='white', linewidth=2)
+    ax.add_patch(arc2)
+    
+    # Add needle
+    angle_rad = np.radians(theta)
+    needle_x = 0.5 + 0.35 * np.cos(angle_rad)
+    needle_y = 0.35 * np.sin(angle_rad)
+    ax.plot([0.5, needle_x], [0, needle_y], color='white', linewidth=3)
+    ax.plot(0.5, 0, 'o', color='white', markersize=10)
+    
+    # Add text
+    ax.text(0.5, -0.15, f'{confidence*100:.1f}%', 
+            ha='center', va='top', fontsize=28, fontweight='bold', color=color)
+    ax.text(0.5, -0.25, prediction, 
+            ha='center', va='top', fontsize=20, fontweight='bold', color=color)
+    
+    # Add scale labels
+    ax.text(0.05, 0.05, '0%', ha='left', va='bottom', fontsize=10, color='white')
+    ax.text(0.5, 0.45, '50%', ha='center', va='bottom', fontsize=10, color='white')
+    ax.text(0.95, 0.05, '100%', ha='right', va='bottom', fontsize=10, color='white')
+    
+    ax.set_xlim(0, 1)
+    ax.set_ylim(-0.3, 0.5)
+    ax.axis('off')
+    
+    plt.tight_layout()
     return fig
 
-def create_probability_bar(healthy_prob, disease_prob):
-    """Create a horizontal bar chart showing class probabilities"""
-    fig = go.Figure()
+def create_probability_bars(healthy_prob, disease_prob):
+    """Create probability bars using matplotlib"""
+    fig, ax = plt.subplots(figsize=(8, 2), facecolor='#0a1929')
+    ax.set_facecolor('#0a1929')
     
-    fig.add_trace(go.Bar(
-        y=['Probability'],
-        x=[healthy_prob * 100],
-        name='Healthy',
-        orientation='h',
-        marker=dict(color='#00ff88'),
-        text=[f'{healthy_prob*100:.1f}%'],
-        textposition='inside',
-        hovertemplate='Healthy: %{x:.2f}%<extra></extra>'
-    ))
+    categories = ['Healthy', 'Disease']
+    values = [healthy_prob * 100, disease_prob * 100]
+    colors = ['#00ff88', '#ff4444']
     
-    fig.add_trace(go.Bar(
-        y=['Probability'],
-        x=[disease_prob * 100],
-        name='Disease',
-        orientation='h',
-        marker=dict(color='#ff4444'),
-        text=[f'{disease_prob*100:.1f}%'],
-        textposition='inside',
-        hovertemplate='Disease: %{x:.2f}%<extra></extra>'
-    ))
+    bars = ax.barh(categories, values, color=colors, height=0.6)
     
-    fig.update_layout(
-        barmode='stack',
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="white", size=14),
-        showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        xaxis=dict(range=[0, 100], showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
-        yaxis=dict(showticklabels=False),
-        height=150,
-        margin=dict(l=0, r=0, t=30, b=0)
-    )
+    # Add percentage labels
+    for i, (bar, val) in enumerate(zip(bars, values)):
+        ax.text(val/2, i, f'{val:.1f}%', 
+                ha='center', va='center', fontsize=14, fontweight='bold', color='white')
     
+    ax.set_xlim(0, 100)
+    ax.set_xlabel('Probability (%)', fontsize=12, color='white')
+    ax.tick_params(colors='white', labelsize=11)
+    ax.spines['bottom'].set_color('white')
+    ax.spines['left'].set_color('white')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.grid(axis='x', alpha=0.3, color='white', linestyle='--')
+    
+    plt.tight_layout()
     return fig
 
 def get_disease_info(prediction):
@@ -231,7 +238,7 @@ def get_disease_info(prediction):
                 "Do not rely solely on AI diagnosis - seek medical attention",
                 "Keep a record of this screening for medical consultation"
             ],
-            "color": "#ff4444"
+            "css_class": "disease-box"
         }
     else:
         return {
@@ -243,7 +250,7 @@ def get_disease_info(prediction):
                 "This is a screening tool - not a replacement for medical advice",
                 "Consult a doctor if you have any symptoms or concerns"
             ],
-            "color": "#00ff88"
+            "css_class": "healthy-box"
         }
 
 def main():
@@ -409,18 +416,34 @@ def main():
                         # Display results
                         st.markdown("---")
                         
-                        # Gauge chart
-                        st.plotly_chart(create_gauge_chart(confidence, result), use_container_width=True)
+                        # Create two columns for metrics
+                        metric_col1, metric_col2 = st.columns(2)
+                        with metric_col1:
+                            st.metric("Prediction", result, delta=None)
+                        with metric_col2:
+                            st.metric("Confidence", f"{confidence*100:.1f}%", delta=None)
                         
-                        # Probability bar
+                        # Gauge chart
+                        st.markdown("#### Confidence Score")
+                        fig_gauge = create_gauge_chart(confidence, result)
+                        st.pyplot(fig_gauge)
+                        plt.close()
+                        
+                        # Probability bars
                         st.markdown("#### Class Probabilities")
-                        st.plotly_chart(create_probability_bar(healthy_prob, disease_prob), use_container_width=True)
+                        fig_bars = create_probability_bars(healthy_prob, disease_prob)
+                        st.pyplot(fig_bars)
+                        plt.close()
                         
                         # Disease information
                         info = get_disease_info(result)
                         
-                        st.markdown(f"### {info['title']}")
-                        st.markdown(f"<p style='color: {info['color']};'>{info['description']}</p>", unsafe_allow_html=True)
+                        st.markdown(f"""
+                        <div class='result-box {info['css_class']}'>
+                            <h3>{info['title']}</h3>
+                            <p>{info['description']}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
                         
                         st.markdown("#### 📋 Recommendations:")
                         for rec in info['recommendations']:
@@ -440,11 +463,13 @@ def main():
                 else:
                     st.info("👈 Upload a chest X-ray image to begin analysis")
                     
-                    # Display example
-                    st.markdown("### 📸 Example X-Ray")
-                    st.markdown("Upload a chest X-ray image similar to this:")
-                    st.image("https://via.placeholder.com/400x400/1a1a2e/00d4ff?text=Sample+Chest+X-Ray", 
-                            caption="Example chest X-ray format", use_container_width=True)
+                    st.markdown("### 💡 Quick Start Guide")
+                    st.markdown("""
+                    1. **Upload** a chest X-ray image (JPG, PNG, or BMP)
+                    2. **Click** the "Analyze X-Ray" button
+                    3. **View** the AI-powered analysis results
+                    4. **Review** the confidence score and recommendations
+                    """)
         else:
             st.error("❌ Failed to load model. Please check the model path and try again.")
     else:
